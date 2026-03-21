@@ -12,7 +12,7 @@
 #   docker build -t thermal-printer-server .
 
 # ── Stage 1: install cargo-chef ──────────────────────────────────────────────
-FROM rust:bookworm-slim AS chef
+FROM rust:slim-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
