@@ -1,0 +1,22 @@
+# Build artifacts
+target/
+**/target/
+
+# Python tooling
+python-testing/
+.venv/
+
+# Ansible / infra (not needed in image)
+ansible/
+docker/
+
+# Dev files
+.git/
+.github/
+*.log
+server.log
+
+# Python
+**/__pycache__/
+**/*.pyc
+.python-version

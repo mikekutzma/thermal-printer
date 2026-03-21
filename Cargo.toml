@@ -1,0 +1,3 @@
+[workspace]
+members = ["rp326-usb", "thermal-printer-server"]
+resolver = "2"

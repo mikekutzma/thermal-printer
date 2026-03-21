@@ -1,0 +1,22 @@
+[package]
+name = "rp326-usb"
+version = "0.1.2"
+edition = "2024"
+description = "CLI tool for printing text and images to the Rongta RP326 thermal printer over USB"
+license = "MIT"
+documentation = "https://docs.rs/rp326-usb"
+repository = "https://github.com/mikekutzma/rp326-usb"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+image = "0.25"
+rusb = { version = "0.9", features = ["vendored"] }
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
