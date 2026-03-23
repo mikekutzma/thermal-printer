@@ -1,0 +1,40 @@
+# docker/docker-compose.yml
+# Standalone compose — use this for manual deploys or local Pi testing.
+# The Ansible playbook templates its own version from ansible/vars.yml.
+#
+# Build and run locally:
+#   docker compose -f docker/docker-compose.yml up --build
+#
+# Pull pre-built image (Pi / CI):
+#   docker compose -f docker/docker-compose.yml pull && docker compose up -d
+#
+# NOTE: USB passthrough does not work in Docker Desktop on macOS.
+# For local Mac development, run the server directly: cargo run -p thermal-printer-server
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ghcr.io/mikekutzma/thermal-printer-server:latest
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb
+    ports:
+      - "3000:3000"
+
+volumes:
+  caddy_data:
+  caddy_config:

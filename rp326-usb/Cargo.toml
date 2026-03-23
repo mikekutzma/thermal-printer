@@ -5,7 +5,7 @@ edition = "2024"
 description = "CLI tool for printing text and images to the Rongta RP326 thermal printer over USB"
 license = "MIT"
 documentation = "https://docs.rs/rp326-usb"
-repository = "https://github.com/mikekutzma/rp326-usb"
+repository = "https://github.com/mikekutzma/thermal-printer"
 
 [dependencies]
 anyhow = "1"

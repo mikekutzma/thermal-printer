@@ -1,0 +1,337 @@
+# ansible/playbook.yml
+---
+- name: Configure Pi and deploy services
+  hosts: pi
+  become: true
+  vars_files:
+    - vars.yml
+    - secrets.yml
+
+  # ─── HOST SETUP ─────────────────────────────────────────
+  tasks:
+    # --- System basics ---
+    - name: Set timezone
+      community.general.timezone:
+        name: "{{ timezone }}"
+      tags: [setup]
+
+    # - name: Update apt cache and upgrade packages
+    #   apt:
+    #     update_cache: true
+    #     upgrade: safe
+    #     cache_valid_time: 3600
+    #   tags: [setup]
+    #
+    # - name: Install base packages
+    #   apt:
+    #     name:
+    #       - curl
+    #       - git
+    #       - ufw
+    #       - htop
+    #       - unattended-upgrades
+    #     state: present
+    #   tags: [setup]
+    #
+    # # --- Docker ---
+    # - name: Install Docker prerequisites
+    #   apt:
+    #     name:
+    #       - ca-certificates
+    #       - gnupg
+    #     state: present
+    #   tags: [setup, docker]
+    #
+    # - name: Add Docker GPG key
+    #   ansible.builtin.get_url:
+    #     url: https://download.docker.com/linux/debian/gpg
+    #     dest: /etc/apt/keyrings/docker.asc
+    #     mode: "0644"
+    #   tags: [setup, docker]
+    #
+    # - name: Add Docker apt repo
+    #   ansible.builtin.apt_repository:
+    #     repo: >-
+    #       deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc]
+    #       https://download.docker.com/linux/debian
+    #       {{ ansible_facts['distribution_release'] }} stable
+    #     state: present
+    #     filename: docker
+    #   tags: [setup, docker]
+    #
+    # - name: Install Docker Engine + Compose plugin
+    #   apt:
+    #     name:
+    #       - docker-ce
+    #       - docker-ce-cli
+    #       - containerd.io
+    #       - docker-compose-plugin
+    #     state: present
+    #     update_cache: true
+    #   tags: [setup, docker]
+    #
+    # - name: Add pi user to docker group
+    #   user:
+    #     name: "{{ pi_user }}"
+    #     groups: docker
+    #     append: true
+    #   tags: [setup, docker]
+    #
+    # - name: Enable and start Docker
+    #   systemd:
+    #     name: docker
+    #     enabled: true
+    #     state: started
+    #   tags: [setup, docker]
+    #
+    # # --- Firewall ---
+    # - name: Allow SSH through UFW
+    #   ufw:
+    #     rule: allow
+    #     name: OpenSSH
+    #   tags: [setup, firewall]
+    #
+    # - name: Allow configured ports
+    #   ufw:
+    #     rule: allow
+    #     port: "{{ item.port | string }}"
+    #     proto: "{{ item.proto }}"
+    #   loop: "{{ open_ports }}"
+    #   tags: [setup, firewall]
+    #
+    # - name: Allow Tailscale UDP port
+    #   ufw:
+    #     rule: allow
+    #     port: "41641"
+    #     proto: udp
+    #   when: tailscale | default(false)
+    #   tags: [setup, firewall, tailscale]
+    #
+    # - name: Enable UFW (default deny incoming)
+    #   ufw:
+    #     state: enabled
+    #     policy: deny
+    #     direction: incoming
+    #   tags: [setup, firewall]
+    #
+    # # ─── WIFI-CONNECT (AP-mode fallback) ──────────────────
+    # - name: Ensure NetworkManager is installed and running
+    #   apt:
+    #     name: network-manager
+    #     state: present
+    #   when: wifi_connect | default(false)
+    #   tags: [setup, wifi]
+    #
+    # - name: Enable NetworkManager
+    #   systemd:
+    #     name: NetworkManager
+    #     enabled: true
+    #     state: started
+    #   when: wifi_connect | default(false)
+    #   tags: [setup, wifi]
+    #
+    # - name: Download wifi-connect binary
+    #   ansible.builtin.get_url:
+    #     url: "https://github.com/balena-os/wifi-connect/releases/download/v{{ wifi_connect_version }}/wifi-connect-v{{ wifi_connect_version }}-linux-aarch64.tar.gz"
+    #     dest: /tmp/wifi-connect.tar.gz
+    #     mode: "0644"
+    #   when: wifi_connect | default(false)
+    #   tags: [setup, wifi]
+    #
+    # - name: Extract wifi-connect
+    #   ansible.builtin.unarchive:
+    #     src: /tmp/wifi-connect.tar.gz
+    #     dest: /usr/local/sbin/
+    #     remote_src: true
+    #     extra_opts: ["--strip-components=1"]
+    #     creates: /usr/local/sbin/wifi-connect
+    #   when: wifi_connect | default(false)
+    #   tags: [setup, wifi]
+    #
+    # - name: Install wifi-connect systemd service
+    #   copy:
+    #     dest: /etc/systemd/system/wifi-connect.service
+    #     content: |
+    #       [Unit]
+    #       Description=WiFi Connect — AP fallback for headless WiFi config
+    #       After=NetworkManager.service
+    #       Before=docker.service
+    #       Wants=NetworkManager.service
+    #
+    #       [Service]
+    #       Type=simple
+    #       ExecStartPre=/bin/sleep 5
+    #       ExecStart=/usr/local/sbin/wifi-connect \
+    #         --portal-ssid {{ wifi_connect_ssid }} \
+    #       {% if wifi_connect_passphrase is defined and wifi_connect_passphrase %}            --portal-passphrase {{ wifi_connect_passphrase }} \
+    #       {% endif %}            --portal-listening-port 80 \
+    #         --activity-timeout 300
+    #       Restart=on-failure
+    #       RestartSec=5
+    #
+    #       [Install]
+    #       WantedBy=multi-user.target
+    #     mode: "0644"
+    #   when: wifi_connect | default(false)
+    #   notify: Enable wifi-connect
+    #   tags: [setup, wifi]
+    #
+    # # ─── TAILSCALE ────────────────────────────────────────
+    # - name: Add Tailscale GPG key
+    #   ansible.builtin.get_url:
+    #     url: https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg
+    #     dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    #     mode: "0644"
+    #   when: tailscale | default(false)
+    #   tags: [setup, tailscale]
+    #
+    # - name: Add Tailscale apt repo
+    #   ansible.builtin.apt_repository:
+    #     repo: >-
+    #       deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg]
+    #       https://pkgs.tailscale.com/stable/debian
+    #       {{ ansible_facts['distribution_release'] }} main
+    #     state: present
+    #     filename: tailscale
+    #   when: tailscale | default(false)
+    #   tags: [setup, tailscale]
+    #
+    # - name: Install tailscale
+    #   apt:
+    #     name: tailscale
+    #     state: present
+    #     update_cache: true
+    #   when: tailscale | default(false)
+    #   tags: [setup, tailscale]
+
+    - name: Enable and start tailscaled
+      systemd:
+        name: tailscaled
+        enabled: true
+        state: started
+      when: tailscale | default(false)
+      tags: [setup, tailscale]
+
+    - name: Authenticate Tailscale
+      command: >
+        tailscale up
+        {{ tailscale_args | default('') }}
+        --authkey={{ tailscale_auth_key }}
+      when: tailscale | default(false)
+      changed_when: false
+      tags: [setup, tailscale]
+
+    # ─── DEPLOY SERVICES ──────────────────────────────────
+    - name: Create deploy directory
+      file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        owner: "{{ pi_user }}"
+        group: "{{ pi_user }}"
+        mode: "0755"
+      tags: [deploy]
+
+    - name: Template docker-compose.yml to Pi
+      template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ deploy_dir }}/docker-compose.yml"
+        owner: "{{ pi_user }}"
+        group: "{{ pi_user }}"
+        mode: "0644"
+      notify: Restart docker stack
+      tags: [deploy]
+
+    - name: Copy extra service files (Caddyfile, configs, etc.)
+      synchronize:
+        src: ../services/
+        dest: "{{ deploy_dir }}/"
+        rsync_opts:
+          - "--exclude=docker-compose.yml"
+      notify: Restart docker stack
+      tags: [deploy]
+
+    - name: Log in to GHCR
+      community.docker.docker_login:
+        registry_url: ghcr.io
+        username: "{{ ghcr_username }}"
+        password: "{{ ghcr_token }}"
+      become_user: "{{ pi_user }}"
+      no_log: true
+      tags: [deploy]
+
+    - name: Pull latest images
+      community.docker.docker_compose_v2:
+        project_src: "{{ deploy_dir }}"
+        pull: always
+        state: present
+      become_user: "{{ pi_user }}"
+      tags: [deploy]
+
+    # ─── AUTO-DEPLOY (optional) ───────────────────────────
+    - name: Template auto-deploy script
+      template:
+        src: templates/auto-deploy.sh.j2
+        dest: "{{ deploy_dir }}/auto-deploy.sh"
+        owner: "{{ pi_user }}"
+        mode: "0755"
+      when: auto_deploy | default(false)
+      tags: [auto-deploy]
+
+    - name: Install auto-deploy systemd service
+      copy:
+        dest: /etc/systemd/system/auto-deploy.service
+        content: |
+          [Unit]
+          Description=Auto-deploy from git
+          After=network-online.target docker.service
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          User={{ pi_user }}
+          WorkingDirectory={{ deploy_dir }}
+          ExecStart={{ deploy_dir }}/auto-deploy.sh
+        mode: "0644"
+      when: auto_deploy | default(false)
+      tags: [auto-deploy]
+
+    - name: Install auto-deploy timer
+      copy:
+        dest: /etc/systemd/system/auto-deploy.timer
+        content: |
+          [Unit]
+          Description=Run auto-deploy every {{ auto_deploy_interval }}
+
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec={{ auto_deploy_interval }}
+          RandomizedDelaySec=30s
+
+          [Install]
+          WantedBy=timers.target
+        mode: "0644"
+      when: auto_deploy | default(false)
+      notify: Enable auto-deploy timer
+      tags: [auto-deploy]
+
+  # ─── HANDLERS ─────────────────────────────────────────
+  handlers:
+    - name: Restart docker stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ deploy_dir }}"
+        state: restarted
+      become_user: "{{ pi_user }}"
+
+    - name: Enable wifi-connect
+      systemd:
+        name: wifi-connect.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Enable auto-deploy timer
+      systemd:
+        name: auto-deploy.timer
+        enabled: true
+        state: started
+        daemon_reload: true

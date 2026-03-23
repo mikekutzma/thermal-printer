@@ -1,0 +1,39 @@
+[package]
+name = "thermal-printer-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI for rendering Markdown/HTML to PNG and sending to a thermal-printer-server"
+license = "MIT"
+repository = "https://github.com/mikekutzma/thermal-printer"
+include = ["src/**", "fonts/**", "Cargo.toml"]
+
+[[bin]]
+name = "thermal-printer-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Error handling + CLI
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+# Markdown → HTML
+comrak = { version = "0.36", default-features = false }
+
+# HTML DOM walking
+scraper = "0.23"
+
+# Font shaping + text layout
+cosmic-text = "0.12"
+
+# 2D painting
+tiny-skia = "0.11"
+
+# PNG encoding
+image = "0.25"
+
+# HTTP POST to printer server
+reqwest = { version = "0.12", features = ["blocking", "multipart"] }
+
+# API key JSON parsing
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }

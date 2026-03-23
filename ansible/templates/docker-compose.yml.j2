@@ -1,0 +1,28 @@
+# {{ ansible_managed }}
+# docker-compose.yml — generated from ansible/templates/docker-compose.yml.j2
+# Do not edit on the Pi directly; edit vars.yml and redeploy.
+
+services:
+{% for name, svc in services.items() %}
+  {{ name }}:
+{% for key, value in svc.items() %}
+{% if value is mapping %}
+    {{ key }}:
+{% for k, v in value.items() %}
+      {{ k }}: {{ v }}
+{% endfor %}
+{% elif value is iterable and value is not string %}
+    {{ key }}:
+{% for item in value %}
+      - {{ item }}
+{% endfor %}
+{% else %}
+    {{ key }}: {{ value }}
+{% endif %}
+{% endfor %}
+
+{% endfor %}
+
+volumes:
+  caddy_data:
+  caddy_config:

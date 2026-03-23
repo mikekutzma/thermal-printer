@@ -1,0 +1,10 @@
+# ansible/inventory.yml
+all:
+  hosts:
+    pi:
+      ansible_host: magicmirror.lan
+      ansible_user: mirror
+      ansible_python_interpreter: /usr/bin/python3
+      # ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+      # ansible_host: pi.local       # mDNS alternative
+      # ansible_host: pi.tail12345.ts.net  # Tailscale alternative

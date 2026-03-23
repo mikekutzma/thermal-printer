@@ -1,0 +1,13 @@
+# services/Caddyfile
+# Caddy reverse proxy config
+# Caddy handles HTTPS automatically if you use a real domain.
+
+# Option A: Local network only (HTTP, no certs)
+:80 {
+    reverse_proxy app:3000
+}
+
+# Option B: Public domain with automatic HTTPS
+# your-domain.com {
+#     reverse_proxy app:3000
+# }

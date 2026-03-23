@@ -1,9 +1,9 @@
 mod app;
 
-use app::{ResultPage, UploadPage};
+use app::UploadPage;
 use axum::{
     extract::{DefaultBodyLimit, Multipart},
-    response::Html,
+    response::{Html, Json},
     routing::{get, post},
     Router,
 };
@@ -12,7 +12,7 @@ use rp326_usb::{
     escpos::{DitherMode, Packet},
     printer::Printer,
 };
-use std::path::Path;
+use serde::Serialize;
 use std::time::Instant;
 use tracing::{info, instrument, warn};
 
@@ -27,7 +27,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
-        .route("/print", post(print_file))
+        .route("/print", post(print_handler))
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024)); // 50 MB
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
@@ -42,72 +42,37 @@ async fn index() -> Html<String> {
     ))
 }
 
+// ── Response types ────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct PrintResponse {
+    ok: bool,
+    message: String,
+}
+
+impl PrintResponse {
+    fn ok(message: impl Into<String>) -> Json<Self> {
+        Json(Self { ok: true, message: message.into() })
+    }
+    fn err(message: impl Into<String>) -> Json<Self> {
+        Json(Self { ok: false, message: message.into() })
+    }
+}
+
+// ── Print payload ─────────────────────────────────────────────────────────────
+
+enum PrintPayload {
+    Image { data: bytes::Bytes, dither: DitherMode },
+    Text(String),
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
 #[instrument(skip(multipart))]
-async fn print_file(mut multipart: Multipart) -> Html<String> {
+async fn print_handler(mut multipart: Multipart) -> Json<PrintResponse> {
     let request_start = Instant::now();
 
-    let result = async {
-        // Collect all fields — quality may arrive before or after the file.
-        let mut filename = None;
-        let mut data = None;
-        let mut quality = "high".to_string();
-
-        while let Some(field) = multipart.next_field().await? {
-            match field.name() {
-                Some("quality") => quality = field.text().await?,
-                Some("file") => {
-                    filename = Some(field.file_name().unwrap_or("file").to_string());
-                    data = Some(field.bytes().await?);
-                }
-                _ => {}
-            }
-        }
-
-        let filename = filename.ok_or_else(|| anyhow::anyhow!("No file uploaded"))?;
-        let data = data.ok_or_else(|| anyhow::anyhow!("No file data"))?;
-
-        let dither = match quality.as_str() {
-            "normal" => DitherMode::Threshold,
-            _ => DitherMode::FloydSteinberg,
-        };
-
-        // --- Stage 1: receive upload ---
-        info!(
-            filename,
-            size_bytes = data.len(),
-            quality,
-            elapsed_ms = request_start.elapsed().as_millis(),
-            "upload received"
-        );
-
-        // --- Stage 2: build ESC/POS payload (decode + dither) ---
-        let t = Instant::now();
-        let payload = build_payload(&filename, &data, dither)?;
-        info!(
-            payload_bytes = payload.len(),
-            elapsed_ms = t.elapsed().as_millis(),
-            "payload built"
-        );
-
-        // --- Stage 3: open printer + write ---
-        let t = Instant::now();
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let open_t = Instant::now();
-            let printer = Printer::open()?;
-            info!(elapsed_ms = open_t.elapsed().as_millis(), "printer opened");
-
-            let write_t = Instant::now();
-            printer.write(&payload)?;
-            info!(elapsed_ms = write_t.elapsed().as_millis(), "printer write done");
-
-            Ok(())
-        })
-        .await??;
-        info!(elapsed_ms = t.elapsed().as_millis(), "print complete");
-
-        anyhow::Ok(filename)
-    }
-    .await;
+    let result = parse_and_print(&mut multipart, request_start).await;
 
     info!(
         success = result.is_ok(),
@@ -115,55 +80,120 @@ async fn print_file(mut multipart: Multipart) -> Html<String> {
         "request finished"
     );
 
-    Html(format!(
-        "<!DOCTYPE html>{}",
-        match result {
-            Ok(filename) => {
-                let msg = format!("\"{}\" sent to printer.", filename);
-                view! { <ResultPage message=msg success=true/> }.to_html()
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                warn!(error = %e, "print failed");
-                view! { <ResultPage message=msg success=false/> }.to_html()
-            }
+    match result {
+        Ok(msg) => PrintResponse::ok(msg),
+        Err(e) => {
+            warn!(error = %e, "print failed");
+            PrintResponse::err(e.to_string())
         }
-    ))
+    }
 }
 
-fn build_payload(filename: &str, data: &[u8], dither: DitherMode) -> anyhow::Result<Vec<u8>> {
-    let ext = Path::new(filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+async fn parse_and_print(
+    multipart: &mut Multipart,
+    request_start: Instant,
+) -> anyhow::Result<String> {
+    let mut payload: Option<PrintPayload> = None;
+    let mut quality = "high".to_string();
 
+    while let Some(field) = multipart.next_field().await? {
+        match field.name() {
+            Some("quality") => {
+                quality = field.text().await?;
+            }
+            Some("file") => {
+                if payload.is_some() {
+                    anyhow::bail!("Received both 'file' and 'text' fields — send one or the other");
+                }
+                let data = field.bytes().await?;
+                let dither = dither_from_quality(&quality);
+                payload = Some(PrintPayload::Image { data, dither });
+            }
+            Some("text") => {
+                if payload.is_some() {
+                    anyhow::bail!("Received both 'file' and 'text' fields — send one or the other");
+                }
+                payload = Some(PrintPayload::Text(field.text().await?));
+            }
+            _ => {}
+        }
+    }
+
+    let payload = payload.ok_or_else(|| {
+        anyhow::anyhow!("No payload: send either a 'file' field (image) or a 'text' field")
+    })?;
+
+    // --- Stage 1: received ---
+    match &payload {
+        PrintPayload::Image { data, .. } => info!(
+            size_bytes = data.len(),
+            quality,
+            elapsed_ms = request_start.elapsed().as_millis(),
+            "image upload received"
+        ),
+        PrintPayload::Text(t) => info!(
+            chars = t.len(),
+            elapsed_ms = request_start.elapsed().as_millis(),
+            "text upload received"
+        ),
+    }
+
+    // --- Stage 2: build ESC/POS payload ---
+    let t = Instant::now();
+    let escpos = build_escpos(payload)?;
+    info!(
+        payload_bytes = escpos.len(),
+        elapsed_ms = t.elapsed().as_millis(),
+        "ESC/POS payload built"
+    );
+
+    // --- Stage 3: open printer + write ---
+    let t = Instant::now();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let open_t = Instant::now();
+        let printer = Printer::open()?;
+        info!(elapsed_ms = open_t.elapsed().as_millis(), "printer opened");
+
+        let write_t = Instant::now();
+        printer.write(&escpos)?;
+        info!(elapsed_ms = write_t.elapsed().as_millis(), "printer write done");
+
+        Ok(())
+    })
+    .await??;
+
+    info!(elapsed_ms = t.elapsed().as_millis(), "print complete");
+    Ok("Sent to printer.".into())
+}
+
+// ── ESC/POS builder ───────────────────────────────────────────────────────────
+
+fn build_escpos(payload: PrintPayload) -> anyhow::Result<Vec<u8>> {
     let packet = Packet::new().initialize();
-
-    let packet = if is_image_ext(&ext) {
-        let t = Instant::now();
-        let img = image::load_from_memory(data)
-            .map_err(|e| anyhow::anyhow!("Failed to decode image: {e}"))?;
-        info!(
-            width = img.width(),
-            height = img.height(),
-            elapsed_ms = t.elapsed().as_millis(),
-            "image decoded"
-        );
-
-        let t = Instant::now();
-        let p = packet.image(img, dither);
-        info!(elapsed_ms = t.elapsed().as_millis(), "image dithered + encoded");
-        p
-    } else {
-        let text = std::str::from_utf8(data)
-            .map_err(|_| anyhow::anyhow!("File is not valid UTF-8 text"))?;
-        packet.text(text)
+    let packet = match payload {
+        PrintPayload::Image { data, dither } => {
+            let t = Instant::now();
+            let img = image::load_from_memory(&data)
+                .map_err(|e| anyhow::anyhow!("Failed to decode image: {e}"))?;
+            info!(
+                width = img.width(),
+                height = img.height(),
+                elapsed_ms = t.elapsed().as_millis(),
+                "image decoded"
+            );
+            let t = Instant::now();
+            let p = packet.image(img, dither);
+            info!(elapsed_ms = t.elapsed().as_millis(), "image dithered + encoded");
+            p
+        }
+        PrintPayload::Text(text) => packet.text(&text),
     };
-
     Ok(packet.feed(4).cut().into_bytes())
 }
 
-fn is_image_ext(ext: &str) -> bool {
-    matches!(ext, "jpg" | "jpeg" | "png" | "bmp" | "gif" | "webp" | "tiff" | "tif")
+fn dither_from_quality(quality: &str) -> DitherMode {
+    match quality {
+        "normal" => DitherMode::Threshold,
+        _ => DitherMode::FloydSteinberg,
+    }
 }
