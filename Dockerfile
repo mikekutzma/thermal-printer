@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release -p thermal-printer-server --recipe-path recipe.json
 
 # ── Stage 4: build the application ───────────────────────────────────────────
 COPY . .
